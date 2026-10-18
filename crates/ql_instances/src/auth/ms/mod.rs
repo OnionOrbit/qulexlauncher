@@ -29,15 +29,7 @@
 //!
 //! ```no_run
 //! # async fn do2() -> Result<(), Box<dyn std::error::Error>> {
-//! # // Default construction
-//! # let auth_code_response = ql_instances::auth::ms::AuthCodeResponse {
-//! #     user_code: String::new(),
-//! #     device_code: String::new(),
-//! #     verification_uri: String::new(),
-//! #     expires_in: 0,
-//! #     interval: 0,
-//! #     message: String::new(),
-//! # };
+//! # let auth_code_response = ql_instances::auth::ms::login_1_link().await?;
 //! use ql_instances::auth::ms::login_3_xbox;
 //! use ql_instances::auth::ms::login_2_wait;
 //!

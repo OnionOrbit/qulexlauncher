@@ -70,16 +70,14 @@ type ProcessExitResult = Option<
 async fn handle_process_exit(handle: tokio::task::JoinHandle<ProcessExitResult>) -> bool {
     let out = handle.await;
 
-    match {
-        let this = out.strerr().map(|n| {
-            n.expect("stdout/stderr should exist, unless you turned switched off logging")
-                .strerr()
-        });
-        match this {
-            Ok(inner) => inner,
-            Err(e) => Err(e),
-        }
-    } {
+    // Flattened from a `match { block }` scrutinee (clippy::blocks_in_conditions):
+    // `Option<Result<..>>` -> expect -> `Result<.., String>`.
+    let result = out.strerr().and_then(|n| {
+        n.expect("stdout/stderr should exist, unless you turned switched off logging")
+            .strerr()
+    });
+
+    match result {
         Ok((code, _, diag)) => {
             if let Some(Diagnostic::MacOSPixelFormat) = diag {
                 println!("\nmacOS VM lacks GPU acceleration, test successful");
@@ -96,5 +94,5 @@ async fn handle_process_exit(handle: tokio::task::JoinHandle<ProcessExitResult>)
             err!("Instance child process: {err}");
         }
     }
-    return false;
+    false
 }

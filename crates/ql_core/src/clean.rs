@@ -29,7 +29,7 @@ const SIZE_LIMIT_BYTES: u64 = 100 * 1024 * 1024; // 100 MB
 /// - `dir` points to a non-directory path
 /// - the user lacks permissions to create, scan, or delete entries in `dir`
 pub async fn dir(dir: PathBuf) -> Result<(), IoError> {
-    if dir == LAUNCHER_DIR.to_path_buf() {
+    if dir == *LAUNCHER_DIR {
         return Ok(());
     }
     if !exists(&dir).await {
@@ -164,7 +164,7 @@ pub async fn assets_dir() -> Result<u64, JsonFileError> {
 
         let mut dir_is_empty = true;
         while let Some(object) = o_dir.next_entry().await.path(&o_dir_path)? {
-            let name = object.file_name().to_string_lossy().to_string();
+            let name = object.file_name().to_string_lossy().into_owned();
             if hashes.contains(&name) {
                 dir_is_empty = false;
             } else {
@@ -186,7 +186,7 @@ pub async fn assets_dir() -> Result<u64, JsonFileError> {
 
 async fn get_used_hashes(
     indexes_dir: &Path,
-    index_files: &[String],
+    index_files: &HashSet<String>,
 ) -> Result<HashSet<String>, JsonFileError> {
     let mut jsons = Vec::new();
     if !fs::try_exists(indexes_dir).await.path(indexes_dir)? {
@@ -198,7 +198,7 @@ async fn get_used_hashes(
     while let Some(next) = indexes.next_entry().await.path(indexes_dir)? {
         let path = next.path();
         let name = next.file_name();
-        if !index_files.iter().any(|n| **n == name) {
+        if !index_files.contains(&*name.to_string_lossy()) {
             fs::remove_file(&path).await.path(path)?;
             continue;
         }
@@ -216,17 +216,17 @@ async fn get_used_hashes(
     Ok(hashes)
 }
 
-async fn get_used_indexes() -> Result<Vec<String>, JsonFileError> {
+async fn get_used_indexes() -> Result<HashSet<String>, JsonFileError> {
     let instances_dir = LAUNCHER_DIR.join("instances");
     if !fs::try_exists(&instances_dir).await.path(&instances_dir)? {
         fs::create_dir_all(&instances_dir)
             .await
             .path(instances_dir)?;
-        return Ok(Vec::new());
+        return Ok(HashSet::new());
     }
     let mut instances = fs::read_dir(&instances_dir).await.path(&instances_dir)?;
 
-    let mut used_files = Vec::new();
+    let mut used_files = HashSet::new();
 
     while let Some(instance) = instances.next_entry().await.path(&instances_dir)? {
         let json_path = instance.path().join("details.json");
@@ -239,7 +239,7 @@ async fn get_used_indexes() -> Result<Vec<String>, JsonFileError> {
         let Ok(json) = serde_json::from_str::<VersionDetails>(&json) else {
             continue;
         };
-        used_files.push(format!("{}.json", json.assetIndex.id));
+        used_files.insert(format!("{}.json", json.assetIndex.id));
     }
 
     Ok(used_files)

@@ -40,3 +40,6 @@ keyring = { version = "3", features = ["apple-native"] }
 keyring = { version = "3", features = ["sync-secret-service", "vendored"] }
 [target.'cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))'.dependencies]
 keyring = { version = "3", features = ["sync-secret-service"] }
+
+[lints]
+workspace = true

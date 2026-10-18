@@ -2,7 +2,7 @@ use std::{
     collections::HashSet,
     ffi::OsStr,
     io::{Cursor, Write},
-    path::{MAIN_SEPARATOR, Path, PathBuf},
+    path::{Path, PathBuf},
     sync::LazyLock,
 };
 
@@ -30,12 +30,13 @@ use crate::{IntoIoError, JsonDownloadError, download, error::IoError};
 /// - if you're on an unsupported platform (other than Windows, Linux, macOS, Redox, any linux-like unix)
 /// - if the launcher directory could not be created (permissions issue)
 #[allow(clippy::doc_markdown)]
-pub static LAUNCHER_DIR: LazyLock<PathBuf> = LazyLock::new(|| get_launcher_dir().unwrap());
+pub static LAUNCHER_DIR: LazyLock<PathBuf> =
+    LazyLock::new(|| get_launcher_dir().expect("failed to initialize LAUNCHER_DIR"));
 
 /// The path to the QuantumLauncher cache folder.
 #[allow(clippy::doc_markdown)]
 pub static LAUNCHER_CACHE_DIR: LazyLock<PathBuf> =
-    LazyLock::new(|| get_launcher_cache_dir().unwrap());
+    LazyLock::new(|| get_launcher_cache_dir().expect("failed to initialize LAUNCHER_CACHE_DIR"));
 
 /// Returns the path to the QuantumLauncher root folder.
 ///
@@ -94,15 +95,16 @@ struct QlDirInfo {
 }
 
 fn line_and_body(input: &str) -> (String, String) {
-    let mut lines = input.trim().lines();
-
-    // Get the first line (if any)
-    if let Some(first) = lines.next() {
-        let rest = lines.collect::<Vec<_>>().join("\n");
-        return (first.trim().to_owned(), rest);
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return (String::new(), String::new());
     }
-
-    (String::default(), String::default())
+    // Proven: `split_once` avoids allocating a Vec + join per call.
+    if let Some((first, rest)) = trimmed.split_once('\n') {
+        (first.trim().to_owned(), rest.to_owned())
+    } else {
+        (trimmed.to_owned(), String::new())
+    }
 }
 
 fn check_qlportable_file() -> Option<QlDirInfo> {
@@ -411,15 +413,17 @@ pub async fn copy_dir_recursive_ext(
         tokio::fs::copy(src, dst).await.path(src)?;
         return Ok(());
     }
-    if !exists(dst).await {
-        tokio::fs::create_dir_all(dst).await.path(dst)?;
-    }
+    // `create_dir_all` is idempotent; avoids extra `exists` syscall (perf: less stat).
+    tokio::fs::create_dir_all(dst).await.path(dst)?;
 
     let mut dir = tokio::fs::read_dir(src).await.path(src)?;
     while let Ok(Some(entry)) = dir.next_entry().await {
         let path = entry.path();
         let dest_path = dst.join(entry.file_name());
 
+        // Clippy: `iter().any` with `starts_with` is O(n) per file; pre-normalize exceptions
+        // outside hot loop would be better if list is large. Kept inline for small lists,
+        // but uses `==` first (cheaper than prefix check) for perf.
         if exceptions.iter().any(|n| *n == path || path.starts_with(n)) {
             continue;
         }
@@ -454,9 +458,16 @@ pub async fn read_filenames_from_dir<P: AsRef<Path>>(dir: P) -> Result<Vec<DirIt
         parent: dir.to_owned(),
     })? {
         if let Some(name) = entry.file_name().to_str() {
+            // Bug fix + perf: use async `file_type()` instead of blocking `Path::is_file()`
+            // which would do a second stat syscall and block the async runtime.
+            let is_file = entry
+                .file_type()
+                .await
+                .map(|ft| ft.is_file())
+                .unwrap_or(false);
             filenames.push(DirItem {
                 name: name.to_owned(),
-                is_file: entry.path().is_file(),
+                is_file,
             });
         }
     }
@@ -544,14 +555,18 @@ pub async fn zip_directory_to_bytes<P: AsRef<Path>>(dir: P) -> std::io::Result<V
         let relative_path = path
             .strip_prefix(base_path)
             .map_err(std::io::Error::other)?;
-        let mut name_in_zip = relative_path.to_string_lossy().to_string();
-        // .replace('\\', "/");
+        // Bug fix: zip spec always uses '/' even on Windows; using MAIN_SEPARATOR would produce
+        // invalid entries on Windows. Also avoid extra clone via `into_owned()`.
+        let mut name_in_zip = relative_path
+            .to_string_lossy()
+            .into_owned()
+            .replace('\\', "/");
 
         if path.is_dir() {
             // Add directory entries with trailing slash (required for Java jar loading)
             if !name_in_zip.is_empty() {
-                if !name_in_zip.ends_with(MAIN_SEPARATOR) {
-                    name_in_zip.push(MAIN_SEPARATOR);
+                if !name_in_zip.ends_with('/') {
+                    name_in_zip.push('/');
                 }
                 zip.start_file(name_in_zip, dir_options)?;
             }

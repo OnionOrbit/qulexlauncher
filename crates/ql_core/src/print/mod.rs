@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     fmt::Display,
     fs::{File, OpenOptions},
     io::{BufWriter, Write},
@@ -35,19 +36,20 @@ pub static REDACTION_USERNAME: LazyLock<(Vec<String>, String)> = LazyLock::new(|
 /// Automatically redact sensitive information from log messages.
 /// This is called by all logging macros to ensure no username/path exposure.
 #[must_use]
-pub fn auto_redact(message: &str) -> String {
-    let mut redacted = message.to_string();
-
+pub fn auto_redact(message: &str) -> Cow<'_, str> {
+    // Fast path (the overwhelmingly common case): nothing to redact, so
+    // borrow instead of the old unconditional `message.to_string()` copy.
+    // Bug fix: an empty `username` would corrupt the message via
+    // `replace("", "[REDACTED]")`, so it is explicitly skipped.
     if !redact_sensitive_info() {
-        // If redacting turned off, just continue
-        return redacted;
+        return Cow::Borrowed(message);
     }
 
     let (home_dir, username) = &*REDACTION_USERNAME;
-    if home_dir.iter().any(|n| message.contains(n)) {
-        redacted = redacted.replace(username, "[REDACTED]");
+    if username.is_empty() || !home_dir.iter().any(|n| message.contains(n)) {
+        return Cow::Borrowed(message);
     }
-    redacted
+    Cow::Owned(message.replace(username.as_str(), "[REDACTED]"))
 }
 
 #[derive(Clone, Copy)]
@@ -227,8 +229,12 @@ static ANSI_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\x1B\[[0-9;]*[A-Za-z]").unwrap());
 
 /// Removes ANSI escape codes (colors, formatting, cursor moves) from a string.
-pub fn strip_ansi_codes(input: &str) -> String {
-    ANSI_REGEX.replace_all(input, "").to_string()
+pub fn strip_ansi_codes(input: &str) -> Cow<'_, str> {
+    // Fast path: no ESC byte -> no ANSI codes -> borrow, no regex scan/copy.
+    if !input.contains('\x1b') {
+        return Cow::Borrowed(input);
+    }
+    ANSI_REGEX.replace_all(input, "")
 }
 
 /// Used to fix a super annoying bug

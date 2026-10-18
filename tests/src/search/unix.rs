@@ -43,14 +43,10 @@ pub fn search_for_window(pid: u32, sys: &sysinfo::System) -> bool {
 }
 
 fn kill_process(pid: u32, sys: &sysinfo::System, n: std::process::Output) -> bool {
-    if String::from_utf8_lossy(&n.stdout)
+    // Short-circuit: `kill_proc` only runs when a window was actually found.
+    String::from_utf8_lossy(&n.stdout)
         .lines()
         .map(|n| n.trim())
         .any(|n| !n.is_empty())
-    {
-        if kill_proc(pid, sys) {
-            return true;
-        }
-    }
-    false
+        && kill_proc(pid, sys)
 }

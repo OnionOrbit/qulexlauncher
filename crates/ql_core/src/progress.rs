@@ -48,11 +48,20 @@ impl From<&DownloadProgress> for f32 {
             DownloadProgress::DownloadingJsonManifest => 0.1,
             DownloadProgress::DownloadingVersionJson => 0.2,
             DownloadProgress::DownloadingJar => 0.3,
+            // `out_of == 0` (empty index) would divide by zero -> inf/NaN bar.
             DownloadProgress::DownloadingLibraries { progress, out_of } => {
-                (*progress as f32 / *out_of as f32) + 1.0
+                if *out_of == 0 {
+                    1.0
+                } else {
+                    (*progress as f32 / *out_of as f32) + 1.0
+                }
             }
             DownloadProgress::DownloadingAssets { progress, out_of } => {
-                (*progress as f32 * 8.0 / *out_of as f32) + 2.0
+                if *out_of == 0 {
+                    2.0
+                } else {
+                    (*progress as f32 * 8.0 / *out_of as f32) + 2.0
+                }
             }
         }
     }
@@ -127,6 +136,10 @@ impl Progress for DownloadProgress {
 
 impl Progress for GenericProgress {
     fn get_num(&self) -> f32 {
+        // `total == 0` would produce inf/NaN; treat it as complete-or-empty.
+        if self.total == 0 {
+            return 0.0;
+        }
         self.done as f32 / self.total as f32
     }
 

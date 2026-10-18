@@ -347,7 +347,8 @@ impl Library {
                             feature = "simulate_macos_arm64",
                             feature = "simulate_linux_arm32",
                         ))] {
-                            if os.name == format!("{OS_NAME}-{ARCH}") {
+                            // Zero-alloc equivalent of `os.name == format!("{OS_NAME}-{ARCH}")`.
+                            if os.name.split_once('-') == Some((OS_NAME, ARCH)) {
                                 allowed = rule.action == "allow";
                             }
                             if let Some(libname) = &self.name {
@@ -391,10 +392,10 @@ impl Library {
 }
 
 fn supports_os(classifiers: &BTreeMap<String, LibraryClassifier>) -> bool {
+    // Was: `k.starts_with(&format!("natives-{n}"))` (an allocation per classifier).
     classifiers.iter().any(|(k, _)| {
-        OS_NAMES
-            .iter()
-            .any(|n| k.starts_with(&format!("natives-{n}")))
+        k.strip_prefix("natives-")
+            .is_some_and(|rest| OS_NAMES.iter().any(|n| rest.starts_with(*n)))
     })
 }
 

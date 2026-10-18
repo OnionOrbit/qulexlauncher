@@ -197,7 +197,9 @@ pub async fn do_jobs_with_limit<T, E>(
     limit: usize,
 ) -> Result<Vec<T>, E> {
     let mut tasks = futures::stream::FuturesUnordered::new();
-    let mut outputs = Vec::new();
+    // Perf: pre-reserve to avoid repeated reallocations as tasks complete.
+    // `limit` is a good lower bound; exact count is unknown for generic Iterator.
+    let mut outputs = Vec::with_capacity(limit.min(1024));
 
     for result in results {
         tasks.push(result);
@@ -684,10 +686,29 @@ impl LaunchedProcess {
 
 #[must_use]
 pub fn sanitize_instance_name(mut name: String) -> String {
-    let mut disallowed = vec![
-        '/', '\\', ':', '*', '?', '"', '<', '>', '|', '\'', '\0', '\u{7F}',
-    ];
-    disallowed.extend('\u{1}'..='\u{1F}');
-    name.retain(|c| !disallowed.contains(&c));
-    name.trim().to_owned()
+    // Perf: avoid Vec allocation + O(n*m) `contains` per char.
+    // Use direct `matches!` which optimizes to a jump table / range check.
+    name.retain(|c| {
+        !matches!(
+            c,
+            '/' | '\\'
+                | ':'
+                | '*'
+                | '?'
+                | '"'
+                | '<'
+                | '>'
+                | '|'
+                | '\''
+                | '\0'
+                | '\u{7F}'
+                | '\u{0001}'..='\u{001F}'
+        )
+    });
+    // Trim in place instead of `name.trim().to_owned()` (a second allocation).
+    let start = name.len() - name.trim_start().len();
+    name.drain(..start);
+    let end = name.trim_end().len();
+    name.truncate(end);
+    name
 }

@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    borrow::Cow,
     fmt::{Display, Write},
     process::ExitStatus,
     sync::{Arc, mpsc::Sender},
@@ -56,18 +56,23 @@ pub(crate) async fn read_logs(
     ));
     let stderr_read = tokio::spawn(read_log_from_stream(
         stderr,
-        sender.clone(),
+        sender,
         censors.clone(),
         false,
-        false,
+        // Bug fix: this is the stderr stream; `false` mislabelled every
+        // stderr line as a normal message instead of an error.
+        true,
     ));
 
+    // NOTE: do not hold `child.lock()` across `Child::wait()`. Other tasks
+    // (Kill button, server stdin) lock the same mutex; holding it for the
+    // game's whole lifetime would block them until exit. Poll `try_wait`,
+    // dropping the guard before sleeping.
     let status = loop {
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        let mut child = child.lock().await;
-        if let Some(status) = child.try_wait()? {
+        if let Some(status) = child.lock().await.try_wait()? {
             break status;
         }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     };
     let mut log_raw = stdout_read.await??;
     log_raw.extend(stderr_read.await??);
@@ -91,7 +96,7 @@ async fn read_log_from_stream<R: AsyncBufRead + Unpin>(
     let mut has_errored = false;
 
     while let Ok(Some(mut line)) = stream.next_line().await {
-        line = censor(&line, &censors);
+        line = censor(&line, &censors).into_owned();
         if uses_xml {
             xml_parse(
                 sender.as_ref(),
@@ -132,19 +137,28 @@ async fn read_log_from_stream<R: AsyncBufRead + Unpin>(
     Ok(log_raw)
 }
 
-fn censor(input: &str, censors: &[String]) -> String {
-    if redact_sensitive_info() {
-        let mut out = censors.iter().fold(input.to_string(), |acc, censor| {
-            acc.replace(censor, "[REDACTED]")
-        });
-        let (home_dir, username) = &*REDACTION_USERNAME;
-        if home_dir.iter().any(|n| input.contains(n)) {
-            out = out.replace(username, "[REDACTED]");
-        }
-        out
-    } else {
-        input.to_string()
+fn censor<'a>(input: &'a str, censors: &[String]) -> Cow<'a, str> {
+    if !redact_sensitive_info() {
+        return Cow::Borrowed(input);
     }
+    // Fast path: allocate only when something actually needs redacting.
+    // Bug fix: an empty censor would make `str::replace` insert
+    // "[REDACTED]" between every char, so empty entries are skipped.
+    let mut out: Option<String> = None;
+    for censor in censors.iter().filter(|c| !c.is_empty()) {
+        let haystack: &str = out.as_deref().unwrap_or(input);
+        if haystack.contains(censor.as_str()) {
+            out = Some(haystack.replace(censor.as_str(), "[REDACTED]"));
+        }
+    }
+    let (home_dir, username) = &*REDACTION_USERNAME;
+    if !username.is_empty() && home_dir.iter().any(|n| input.contains(n)) {
+        let haystack: &str = out.as_deref().unwrap_or(input);
+        if haystack.contains(username.as_str()) {
+            out = Some(haystack.replace(username.as_str(), "[REDACTED]"));
+        }
+    }
+    out.map_or(Cow::Borrowed(input), Cow::Owned)
 }
 
 fn send(sender: Option<&Sender<LogLine>>, msg: LogLine) {
@@ -411,43 +425,45 @@ impl LogEvent {
     }
 }
 
-fn parse_color(msg: &str) -> String {
-    let color_map: HashMap<char, &str> = [
+fn color_code(format: char) -> Option<&'static str> {
+    // A `match` compiles to a jump table; the old code rebuilt a 21-entry
+    // HashMap on *every* log line.
+    Some(match format {
         // Colors
-        ('0', "\x1b[30m"), // Black
-        ('1', "\x1b[34m"), // Dark Blue
-        ('2', "\x1b[32m"), // Dark Green
-        ('3', "\x1b[36m"), // Dark Aqua
-        ('4', "\x1b[31m"), // Dark Red
-        ('5', "\x1b[35m"), // Dark Purple
-        ('6', "\x1b[33m"), // Gold
-        ('7', "\x1b[37m"), // Gray
-        ('8', "\x1b[90m"), // Dark Gray
-        ('9', "\x1b[94m"), // Blue
-        ('a', "\x1b[92m"), // Green
-        ('b', "\x1b[96m"), // Aqua
-        ('c', "\x1b[91m"), // Red
-        ('d', "\x1b[95m"), // Light Purple
-        ('e', "\x1b[93m"), // Yellow
-        ('f', "\x1b[97m"), // White
+        '0' => "\x1b[30m", // Black
+        '1' => "\x1b[34m", // Dark Blue
+        '2' => "\x1b[32m", // Dark Green
+        '3' => "\x1b[36m", // Dark Aqua
+        '4' => "\x1b[31m", // Dark Red
+        '5' => "\x1b[35m", // Dark Purple
+        '6' => "\x1b[33m", // Gold
+        '7' => "\x1b[37m", // Gray
+        '8' => "\x1b[90m", // Dark Gray
+        '9' => "\x1b[94m", // Blue
+        'a' => "\x1b[92m", // Green
+        'b' => "\x1b[96m", // Aqua
+        'c' => "\x1b[91m", // Red
+        'd' => "\x1b[95m", // Light Purple
+        'e' => "\x1b[93m", // Yellow
+        'f' => "\x1b[97m", // White
         // Formatting
-        ('l', "\x1b[1m"), // Bold
-        ('m', "\x1b[9m"), // Strikethrough
-        ('n', "\x1b[4m"), // Underline
-        ('o', "\x1b[3m"), // Italic
-        ('r', "\x1b[0m"), // Reset
-    ]
-    .iter()
-    .copied()
-    .collect();
+        'l' => "\x1b[1m", // Bold
+        'm' => "\x1b[9m", // Strikethrough
+        'n' => "\x1b[4m", // Underline
+        'o' => "\x1b[3m", // Italic
+        'r' => "\x1b[0m", // Reset
+        _ => return None,
+    })
+}
 
-    let mut out = String::new();
+fn parse_color(msg: &str) -> String {
+    let mut out = String::with_capacity(msg.len() + 4);
 
     let mut iter = msg.chars();
     while let Some(c) = iter.next() {
         if c == '§' {
             let Some(format) = iter.next() else { break };
-            if let Some(color) = color_map.get(&format) {
+            if let Some(color) = color_code(format) {
                 out.push_str(color);
             } else {
                 out.push('§');

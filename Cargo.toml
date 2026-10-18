@@ -53,12 +53,23 @@ image = { version = "0.24", default-features = false, features = [
 tempfile = "3"
 regex = "1"
 
-# [profile.dev]
-# opt-level = 1
+[profile.dev]
+# Faster iteration while still catching misuse; incremental for faster rebuilds
+incremental = true
 
 [profile.dev.package."*"]
 opt-level = 3
 debug = false
+
+[profile.release]
+# Cargo profile tuning: https://doc.rust-lang.org/cargo/reference/profiles.html
+# Thin LTO + one codegen unit trade a little link time for a faster, smaller binary.
+# `panic` is intentionally left at the default (unwind) so tests and embedders keep working.
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"
+incremental = false
 
 [profile.release-test]
 inherits = "release"
@@ -68,5 +79,23 @@ opt-level = "s"
 inherits = "release"
 opt-level = "s"
 lto = "fat"
+codegen-units = 1
 strip = "symbols"
 panic = "abort"
+incremental = false
+
+# Shared lints: https://doc.rust-lang.org/cargo/reference/manifest.html#the-lints-section
+# Members opt in with `[lints] workspace = true`. Kept to `all` + `perf` (not
+# pedantic/nursery) so `cargo clippy` stays signal-rich without flooding legacy code.
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+# Intentional patterns in this codebase (see also crate-level `allow`s).
+doc_markdown = "allow"
+cast_precision_loss = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+zombie_processes = "allow"

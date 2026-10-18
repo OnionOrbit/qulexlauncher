@@ -8,9 +8,9 @@ mod unix;
 #[cfg(all(target_family = "unix", not(target_os = "macos")))]
 pub use unix::search_for_window;
 
-#[cfg(all(target_os = "macos"))]
+#[cfg(target_os = "macos")]
 mod macos;
-#[cfg(all(target_os = "macos"))]
+#[cfg(target_os = "macos")]
 pub use macos::search_for_window;
 
 fn kill_proc(pid: u32, sys: &sysinfo::System) -> bool {

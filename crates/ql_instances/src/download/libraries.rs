@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeMap,
     io::Cursor,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     sync::Mutex,
 };
 
@@ -214,11 +214,18 @@ impl GameDownloader {
     ) -> Result<Vec<u8>, DownloadError> {
         let lib_file_path = libraries_dir.join(PathBuf::from(artifact.get_path()));
 
+        // Was `.expect(...)`: a malformed/empty artifact path panicked the launcher.
         let lib_dir_path = lib_file_path
             .parent()
-            .expect(
-                "Downloaded java library does not have parent module like the sun in com.sun.java",
-            )
+            .ok_or_else(|| {
+                DownloadError::Io(IoError::Io {
+                    error: std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "downloaded library artifact has no parent directory",
+                    ),
+                    path: lib_file_path.clone(),
+                })
+            })?
             .to_path_buf();
 
         fs::create_dir_all(&lib_dir_path).await.path(lib_dir_path)?;
@@ -296,6 +303,17 @@ impl GameDownloader {
 
         if let Some(extract) = extract {
             for exclusion in &extract.exclude {
+                // Bug fix: `natives_dir.join(exclusion)` + lexical `starts_with`
+                // is bypassed by ".." (e.g. "../../x" still *lexically* starts
+                // with the natives dir). Reject escaping components outright.
+                if Path::new(exclusion).components().any(|c| {
+                    matches!(
+                        c,
+                        Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                    )
+                }) {
+                    return Err(DownloadError::NativesOutsideDirRemove);
+                }
                 let path = natives_dir.join(exclusion);
 
                 if !path.starts_with(&natives_dir) {
@@ -426,7 +444,10 @@ impl GameDownloader {
         let natives_url = if let Some(natives) = classifiers.and_then(|n| n.get(natives_name)) {
             natives.url.clone()
         } else {
-            let url = &artifact.url[..artifact.url.len() - 4];
+            // Bug fix: `&url[..url.len() - 4]` panicked on short/non-`.jar` URLs.
+            let Some(url) = artifact.url.strip_suffix(".jar") else {
+                return Ok(());
+            };
             format!("{url}-{natives_name}.jar")
         };
 

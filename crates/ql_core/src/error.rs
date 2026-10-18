@@ -90,12 +90,15 @@ pub enum IoError {
 /// # Example
 ///
 /// ```no_run
+/// # use ql_core::IntoIoError;
 /// # use std::path::Path;
-/// let p = Path::from("some_file.txt");
+/// # fn main() -> Result<(), ql_core::IoError> {
+/// let p = Path::new("some_file.txt");
 /// std::fs::write(p, "hi").path(p)?;
 /// // Here, if this fails, the error message
 /// // will tell you what path it tried writing to.
 /// # Ok(())
+/// # }
 /// ```
 pub trait IntoIoError<T = ()> {
     type Output;

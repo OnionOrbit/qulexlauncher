@@ -241,11 +241,17 @@ pub async fn do_jobs_with_limit<T, E>(
 /// Notice how we don't await on `download_file`? Here's another one.
 ///
 /// ```no_run
+/// # use ql_core::retry;
+/// # async fn download_file(url: &str) -> Result<String, String> {
+/// #     Ok("Hi".to_owned())
+/// # }
+/// # async fn download_something_important() -> Result<String, String> {
 /// // Use this pattern for inline async blocks
 /// retry(|| async move {
-///     download_file("example.com/my_file").await;
-///     download_file("example.com/another_file").await;
+///     download_file("example.com/my_file").await?;
+///     download_file("example.com/another_file").await
 /// }).await
+/// # }
 /// ```
 ///
 /// # Errors

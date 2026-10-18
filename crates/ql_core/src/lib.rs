@@ -458,11 +458,31 @@ impl ListEntryKind {
             ListEntryKind::Preclassic
         } else if id.starts_with("c0.") {
             ListEntryKind::Classic
-        } else if id.contains('w') {
+        } else if Self::is_snapshot_like(id) || id.contains('w') {
             ListEntryKind::Snapshot
         } else {
             ListEntryKind::Release
         }
+    }
+
+    /// Whether a version ID looks like a snapshot, pre-release or
+    /// release candidate based on its name alone.
+    ///
+    /// Upstream manifests sometimes miscategorize the newest
+    /// versions, so the ID itself is checked as a fallback.
+    fn is_snapshot_like(id: &str) -> bool {
+        // Modern naming: `26.1-snapshot-1`, `26.1-pre-1`, `26.1-rc-1`
+        // Legacy naming: `1.16-pre1`, `1.20.2-rc1`, `1.14.2 Pre-Release 3`
+        id.contains("snapshot")
+            || id.contains("-pre")
+            || id.contains("-rc")
+            || id.contains(" Pre-Release")
+            // Classic weekly snapshots: `23w31a`, `26w14a`
+            || (id.len() >= 4
+                && id.as_bytes()[0].is_ascii_digit()
+                && id.as_bytes()[1].is_ascii_digit()
+                && id.as_bytes()[2] == b'w'
+                && id.as_bytes()[3].is_ascii_digit())
     }
 
     #[must_use]
@@ -483,11 +503,56 @@ impl ListEntryKind {
             ListEntryKind::Preclassic
         } else if id.starts_with("c0.") {
             ListEntryKind::Classic
-        } else if ty == "snapshot" {
+        } else if ty == "snapshot" || Self::is_snapshot_like(id) {
             ListEntryKind::Snapshot
         } else {
             ListEntryKind::Release
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ListEntryKind;
+
+    #[test]
+    fn snapshot_like_ids() {
+        for id in [
+            "23w31a",
+            "26w14a",
+            "26.1-snapshot-1",
+            "26.1-pre-1",
+            "26.1-rc-1",
+            "1.16-pre1",
+            "1.20.2-rc1",
+            "1.14.2 Pre-Release 3",
+        ] {
+            assert_eq!(
+                ListEntryKind::calculate(id, "release"),
+                ListEntryKind::Snapshot,
+                "{id} miscategorized"
+            );
+        }
+    }
+
+    #[test]
+    fn release_ids_unaffected() {
+        for id in ["1.20.4", "1.21.11", "26.1", "26.1.1"] {
+            assert_eq!(
+                ListEntryKind::calculate(id, "release"),
+                ListEntryKind::Release,
+                "{id} miscategorized"
+            );
+        }
+        // Era prefixes still take priority over the fallback
+        assert_eq!(
+            ListEntryKind::calculate("b1.7.3", "release"),
+            ListEntryKind::Beta
+        );
+        assert_eq!(
+            ListEntryKind::calculate("1.RV-Pre1", "april-fools"),
+            ListEntryKind::AprilFools
+        );
     }
 }
 

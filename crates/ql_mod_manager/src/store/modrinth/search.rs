@@ -50,23 +50,40 @@ pub async fn do_request(query: &Query, offset: usize) -> Result<Search, ModError
     let filters = serde_json::to_string(&filters).json_to()?;
     params.insert("facets", filters);
 
-    let text = ql_core::CLIENT
+    let response = ql_core::CLIENT
         .get(SEARCH_URL)
         .query(&params)
         .send()
-        .await?
-        .text()
         .await?;
+    let status = response.status();
+    let text = response.text().await?;
+
+    #[derive(Deserialize)]
+    struct Error {
+        error: String,
+        description: String,
+    }
+
+    // A failed request (eg: Modrinth outage) usually returns a
+    // non-JSON error page. Don't misreport that as a launcher bug
+    // ("could not parse JSON"), tell the user what happened instead.
+    if !status.is_success() {
+        if let Ok(error) = serde_json::from_str::<Error>(&text) {
+            return Err(ModError::ApiError {
+                error_id: error.error,
+                description: error.description,
+            });
+        }
+        return Err(ModError::ApiError {
+            error_id: format!("HTTP {status}"),
+            description: "Modrinth may be temporarily unavailable. Please try again later."
+                .to_owned(),
+        });
+    }
 
     let json: Search = match serde_json::from_str(&text) {
         Ok(json) => json,
         Err(e) => {
-            #[derive(Deserialize)]
-            struct Error {
-                error: String,
-                description: String,
-            }
-
             if let Ok(error) = serde_json::from_str::<Error>(&text) {
                 return Err(ModError::ApiError {
                     error_id: error.error,
